@@ -1,0 +1,100 @@
+version: 2
+jobs:
+  build:
+    working_directory: ~/amarnus-circleci2-reference-app
+    docker:
+      - image: node:8
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - dependencies-{{ .Branch }}-{{ checksum "package-lock.json" }}
+      - run:
+          name: prepare build
+          command: npm i && npm run compile
+      # Cache dependencies. Namespace with branch and checksum of the package.json.
+      - save_cache:
+          key: dependencies-{{ .Branch }}-{{ checksum "package-lock.json" }}
+          paths:
+            - node_modules
+      - run:
+          name: run tests
+          command: npm test
+  docker_staging_build:
+    machine: true
+    steps:
+      - checkout
+      - run:
+          name: set node environment
+          command: |
+            . ~/.bashrc
+            nvm install 8
+            nvm use 8
+      - run:
+          name: prepare build
+          command: npm i && npm run compile
+      - run:
+          name: build docker image
+          command: docker build -t amarnus/circleci2-reference-app:staging .
+      - run:
+          name: deploy docker image
+          command: |
+            docker login -u $DOCKER_USER -p $DOCKER_PASS
+            docker push amarnus/circleci2-reference-app:staging
+  docker_production_build:
+    machine: true
+    steps:
+      - checkout
+      - run:
+          name: set node environment
+          command: |
+            . ~/.bashrc
+            nvm install 8
+            nvm use 8
+      - run:
+          name: prepare build
+          command: npm i && npm run compile
+      - run:
+          name: build docker image
+          command: |
+            docker build -t amarnus/circleci2-reference-app:${CIRCLE_TAG} .
+            docker tag amarnus/circleci2-reference-app:${CIRCLE_TAG} amarnus/circleci2-reference-app:latest
+      - run:
+          name: deploy docker image
+          command: |
+            echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+            docker push amarnus/circleci2-reference-app:latest
+            docker push amarnus/circleci2-reference-app:${CIRCLE_TAG}
+workflows:
+  version: 2
+  # Test workflow
+  # Configured to run always except when a version release tag is pushed (from any branch)
+  test:
+    jobs:
+      - build:
+          filters:
+            tags:
+              ignore: /^v[0-9]+(\.[0-9]+)*$/
+  # Staging Deployment workflow with a single job assigned
+  # Configured to run on every push to the `dev` branch after the 'test' job has completed.
+  deploy-staging:
+    jobs:
+      - docker_staging_build:
+          context: default
+          requires:
+            - test
+          filters:
+            branches:
+              only:
+                - dev
+  # Production Deployment workflow with a single job assigned
+  # Configured to run only when a version release tag is pushed (from any branch)
+  deploy-production:
+    jobs:
+      - docker_production_build:
+          context: default
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v[0-9]+(\.[0-9]+)*$/
