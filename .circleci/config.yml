@@ -94,8 +94,6 @@ workflows:
           # Allows this job to access a shared set of environment variables that can be managed from
           # the Circle CI web app by the Organization administrator.
           context: default
-          requires:
-            - test
           filters:
             branches:
               only:
