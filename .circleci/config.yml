@@ -1,0 +1,113 @@
+#############################################################################################################
+# What will you learn here?
+#############################################################################################################
+# • Caching your dependencies: This provides insane speedup to your continuous builds especially if you use Circle CI to run your tests (and not simply to deploy)
+# • Setting up staging & production deploy jobs
+# • Setting up workflows with filters that ensure the staging and production deploy jobs are triggered only when they need to be
+# • Using Contexts
+#############################################################################################################
+version: 2
+jobs:
+  build:
+    working_directory: ~/amarnus-circleci2-reference-app
+    docker:
+      - image: node:8
+    steps:
+      - checkout
+      # Restore from cache when available
+      - restore_cache:
+          keys:
+            - dependencies-{{ .Branch }}-{{ checksum "package-lock.json" }}
+      - run:
+          name: prepare build
+          command: npm i && npm run compile
+      # Cache dependencies. Namespace with branch and checksum of the dependency lock file.
+      - save_cache:
+          key: dependencies-{{ .Branch }}-{{ checksum "package-lock.json" }}
+          paths:
+            - node_modules
+      - run:
+          name: run tests
+          command: npm test
+  deploy_staging:
+    # We are using the 'machine' executor here. The 'docker' executor is the default. Check this script: https://raw.githubusercontent.com/circleci/image-builder/picard-vm-image/provision.sh to understand the tools that ship by default with this CircleCI machine image.
+    machine: true
+    steps:
+      - checkout
+      - run:
+          name: set node environment
+          command: |
+            . ~/.bashrc
+            nvm install 8
+            nvm use 8
+      - run:
+          name: prepare build
+          command: npm i && npm run compile
+      - run:
+          name: build docker image
+          command: docker build -t amarnus/circleci2-reference-app:staging .
+      - run:
+          name: deploy docker image
+          command: |
+            docker login -u $DOCKER_USER -p $DOCKER_PASS
+            docker push amarnus/circleci2-reference-app:staging
+  deploy_production:
+    # We are using the 'machine' executor here. The 'docker' executor is the default. Check this script: https://raw.githubusercontent.com/circleci/image-builder/picard-vm-image/provision.sh to understand the tools that ship by default with this CircleCI machine image.
+    machine: true
+    steps:
+      - checkout
+      - run:
+          name: set node environment
+          command: |
+            . ~/.bashrc
+            nvm install 8
+            nvm use 8
+      - run:
+          name: prepare build
+          command: npm i && npm run compile
+      - run:
+          name: build docker image
+          command: |
+            docker build -t amarnus/circleci2-reference-app:${CIRCLE_TAG} .
+            docker tag amarnus/circleci2-reference-app:${CIRCLE_TAG} amarnus/circleci2-reference-app:latest
+      - run:
+          name: deploy docker image
+          command: |
+            echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+            docker push amarnus/circleci2-reference-app:latest
+            docker push amarnus/circleci2-reference-app:${CIRCLE_TAG}
+workflows:
+  version: 2
+  # Test workflow
+  # Configured to run always except when a version release tag is pushed (from any branch)
+  test:
+    jobs:
+      - build:
+          filters:
+            tags:
+              ignore: /^v[0-9]+(\.[0-9]+)*$/
+  # Staging Deployment workflow with a single job assigned
+  # Configured to run on every push to the `dev` branch after the 'test' job has completed.
+  deploy-staging:
+    jobs:
+      - deploy_staging:
+          # Allows this job to access a shared set of environment variables that can be managed from
+          # the Circle CI web app by the Organization administrator.
+          context: default
+          filters:
+            branches:
+              only:
+                - dev
+  # Production Deployment workflow with a single job assigned
+  # Configured to run only when a version release tag is pushed (from any branch)
+  deploy-production:
+    jobs:
+      - deploy_production:
+          # Allows this job to access a shared set of environment variables that can be managed from
+          # the Circle CI web app by the Organization administrator.
+          context: default
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v[0-9]+(\.[0-9]+)*$/
